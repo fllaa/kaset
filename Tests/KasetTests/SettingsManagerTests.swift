@@ -72,6 +72,12 @@ struct SettingsManagerTests {
         #expect(manager.rememberPlaybackSettings == false)
     }
 
+    @Test("Default resumePlaybackOnLaunch is false")
+    func defaultResumePlaybackOnLaunch() {
+        let manager = SettingsManager.shared
+        #expect(manager.resumePlaybackOnLaunch == false)
+    }
+
     @Test("Disabling rememberPlaybackSettings clears persisted values")
     func disablingRememberPlaybackSettingsClearsValues() {
         let manager = SettingsManager.shared

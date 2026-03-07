@@ -34,7 +34,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.registerForSleepWakeNotifications()
 
         // Restore saved queue if available
-        self.playerService?.restoreQueueFromPersistence()
+        let queueRestored = self.playerService?.restoreQueueFromPersistence() ?? false
+
+        // Auto-resume playback if the setting is enabled and a queue was restored
+        if queueRestored, SettingsManager.shared.resumePlaybackOnLaunch,
+           let song = self.playerService?.currentTrack
+        {
+            Task { @MainActor in
+                await self.playerService?.play(song: song)
+            }
+        }
     }
 
     func applicationWillTerminate(_: Notification) {

@@ -14,6 +14,7 @@ final class SettingsManager {
         static let defaultLaunchPage = "settings.defaultLaunchPage"
         static let hapticFeedbackEnabled = "settings.hapticFeedbackEnabled"
         static let rememberPlaybackSettings = "settings.rememberPlaybackSettings"
+        static let resumePlaybackOnLaunch = "settings.resumePlaybackOnLaunch"
         static let lastFMEnabled = "settings.lastFMEnabled"
         static let enabledServices = "settings.enabledServices"
         static let scrobblePercentThreshold = "settings.scrobblePercentThreshold"
@@ -100,6 +101,13 @@ final class SettingsManager {
         }
     }
 
+    /// Whether to automatically resume playback from the last song on app launch.
+    var resumePlaybackOnLaunch: Bool {
+        didSet {
+            UserDefaults.standard.set(self.resumePlaybackOnLaunch, forKey: Keys.resumePlaybackOnLaunch)
+        }
+    }
+
     /// Per-service enabled flags stored as a dictionary.
     private var enabledServices: [String: Bool] {
         didSet {
@@ -147,6 +155,7 @@ final class SettingsManager {
         self.showNowPlayingNotifications = UserDefaults.standard.object(forKey: Keys.showNowPlayingNotifications) as? Bool ?? true
         self.hapticFeedbackEnabled = UserDefaults.standard.object(forKey: Keys.hapticFeedbackEnabled) as? Bool ?? true
         self.rememberPlaybackSettings = UserDefaults.standard.object(forKey: Keys.rememberPlaybackSettings) as? Bool ?? false
+        self.resumePlaybackOnLaunch = UserDefaults.standard.object(forKey: Keys.resumePlaybackOnLaunch) as? Bool ?? false
 
         // Load per-service enabled flags, migrating from legacy lastFMEnabled if needed
         if let stored = UserDefaults.standard.dictionary(forKey: Keys.enabledServices) as? [String: Bool] {

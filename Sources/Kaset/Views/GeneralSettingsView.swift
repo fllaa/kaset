@@ -49,6 +49,10 @@ struct GeneralSettingsView: View {
                 Toggle("Remember Shuffle & Repeat", isOn: self.$settings.rememberPlaybackSettings)
                     .help("Save shuffle and repeat settings across app restarts")
 
+                // Resume Playback on Launch
+                Toggle("Resume Playback on Launch", isOn: self.$settings.resumePlaybackOnLaunch)
+                    .help("Automatically resume the last playing song when the app launches")
+
                 // Default Launch Page
                 Picker("Default Page on Launch", selection: self.$settings.defaultLaunchPage) {
                     ForEach(SettingsManager.LaunchPage.allCases) { page in
