@@ -230,6 +230,28 @@ struct PlayerServiceQueueTests {
         #expect(newService.queue.count == 3)
         #expect(newService.currentIndex == 1)
         #expect(newService.queue[0].title == "Song 0")
+        // currentTrack must be restored so the player bar shows the last song on relaunch
+        #expect(newService.currentTrack?.title == "Song 1")
+        #expect(newService.currentTrack?.videoId == songs[1].videoId)
+    }
+
+    @Test("Restore queue sets currentTrack to correct song")
+    func restoreQueueSetsCurrentTrack() async {
+        // Arrange – start playing at index 2
+        let songs = TestFixtures.makeSongs(count: 5)
+        await self.playerService.playQueue(songs, startingAt: 2)
+        self.playerService.saveQueueForPersistence()
+
+        // Act – simulate app relaunch with a fresh PlayerService
+        let newService = PlayerService()
+        newService.setYTMusicClient(self.mockClient)
+        let restored = newService.restoreQueueFromPersistence()
+
+        // Assert
+        #expect(restored == true)
+        #expect(newService.currentTrack != nil)
+        #expect(newService.currentTrack?.title == songs[2].title)
+        #expect(newService.currentTrack?.videoId == songs[2].videoId)
     }
 
     @Test("Clear saved queue removes persistence data")
