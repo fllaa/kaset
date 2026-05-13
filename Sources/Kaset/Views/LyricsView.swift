@@ -1,83 +1,32 @@
-import FoundationModels
 import SwiftUI
 
-/// Right sidebar panel displaying lyrics for the current track.
+// MARK: - SidebarLyricsView
+
+/// Fixed-width sidebar glass panel with lyrics and pop-out control.
 @available(macOS 26.0, *)
-struct LyricsView: View {
+struct SidebarLyricsView: View {
     @Environment(PlayerService.self) private var playerService
     @Environment(SyncedLyricsService.self) private var syncedLyricsService
+    @Environment(LyricsPresentationCoordinator.self) private var lyricsCoordinator
 
     let client: any YTMusicClientProtocol
 
-    @State private var lastLoadedVideoId: String?
-    @State private var isLoadingFallback = false
-
-    // AI explanation state
-    @State private var lyricsSummary: LyricsSummary?
-    @State private var partialSummary: LyricsSummary.PartiallyGenerated?
-    @State private var isExplaining = false
-    @State private var showExplanation = false
-    @State private var explanationError: String?
-
-    private let logger = DiagnosticsLogger.ai
-
-    /// Namespace for glass effect morphing.
     @Namespace private var lyricsNamespace
 
     var body: some View {
         GlassEffectContainer(spacing: 0) {
             VStack(spacing: 0) {
-                // Header
                 self.headerView
-
                 Divider()
                     .opacity(0.3)
-
-                // Content
-                self.contentView
+                LyricsContentView(client: self.client, layoutWidth: 280)
             }
             .frame(width: 280)
             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
             .glassEffectID("lyricsPanel", in: self.lyricsNamespace)
         }
         .glassEffectTransition(.materialize)
-        .onChange(of: self.playerService.currentTrack?.videoId) { _, newVideoId in
-            if let videoId = newVideoId, videoId != lastLoadedVideoId {
-                // Reset explanation when track changes
-                self.lyricsSummary = nil
-                self.partialSummary = nil
-                self.showExplanation = false
-                self.explanationError = nil
-                Task {
-                    await self.loadLyrics(for: videoId)
-                }
-            }
-        }
-        .task {
-            if let videoId = playerService.currentTrack?.videoId {
-                await self.loadLyrics(for: videoId)
-            }
-        }
-        .onChange(of: self.syncedLyricsService.currentLyrics) { _, newLyrics in
-            self.updateLyricsPolling(for: newLyrics)
-        }
-        .onDisappear {
-            SingletonPlayerWebView.shared.stopLyricsPoll()
-        }
-        .onAppear {
-            self.updateLyricsPolling(for: self.syncedLyricsService.currentLyrics)
-        }
     }
-
-    private func updateLyricsPolling(for result: LyricResult) {
-        if case .synced = result {
-            SingletonPlayerWebView.shared.startLyricsPoll()
-        } else {
-            SingletonPlayerWebView.shared.stopLyricsPoll()
-        }
-    }
-
-    // MARK: - Header
 
     private var headerView: some View {
         HStack {
@@ -86,449 +35,203 @@ struct LyricsView: View {
                 .foregroundStyle(.primary)
             Spacer()
 
-            // Explain button (AI-powered)
+            Button {
+                self.lyricsCoordinator.popOut()
+            } label: {
+                Image(systemName: "pip.enter")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(String(localized: "Pop Out Lyrics"))
+            .accessibilityLabel(String(localized: "Pop Out Lyrics"))
+
             if self.syncedLyricsService.currentLyrics.isAvailable {
-                Button {
-                    if self.showExplanation {
-                        self.showExplanation = false
-                    } else if self.lyricsSummary != nil {
-                        self.showExplanation = true
-                    } else {
-                        Task {
-                            await self.explainLyrics()
-                        }
-                    }
-                } label: {
-                    if self.isExplaining {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.6)
-                            .frame(width: 10, height: 10)
-                    } else {
-                        Image(systemName: self.showExplanation ? "sparkles.rectangle.stack.fill" : "sparkles")
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(self.showExplanation ? .purple : .secondary)
-                .help(String(localized: "Explain lyrics with AI"))
-                .accessibilityLabel(self.showExplanation ? String(localized: "Hide lyrics explanation") : String(localized: "Explain lyrics with AI"))
-                .requiresIntelligence()
-                .disabled(self.isExplaining)
+                self.explainButton
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
     }
 
-    // MARK: - Content
+    private var explainButton: some View {
+        Button {
+            Task {
+                await self.lyricsCoordinator.explanationViewModel.toggleExplainUI(
+                    syncedLyricsService: self.syncedLyricsService,
+                    playerService: self.playerService,
+                    trackVideoId: self.playerService.currentTrack?.videoId
+                )
+            }
+        } label: {
+            if self.lyricsCoordinator.explanationViewModel.isExplaining {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.6)
+                    .frame(width: 10, height: 10)
+            } else {
+                Image(systemName: self.lyricsCoordinator.explanationViewModel.showExplanation ? "sparkles.rectangle.stack.fill" : "sparkles")
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(self.lyricsCoordinator.explanationViewModel.showExplanation ? .purple : .secondary)
+        .help(String(localized: "Explain lyrics with AI"))
+        .accessibilityLabel(
+            self.lyricsCoordinator.explanationViewModel.showExplanation
+                ? String(localized: "Hide lyrics explanation")
+                : String(localized: "Explain lyrics with AI")
+        )
+        .requiresIntelligence()
+        .disabled(self.lyricsCoordinator.explanationViewModel.isExplaining)
+    }
+}
+
+// MARK: - FloatingLyricsWindow
+
+/// Resizable floating window hosting ``LyricsContentView``.
+@available(macOS 26.0, *)
+struct FloatingLyricsWindow: View {
+    @Environment(PlayerService.self) private var playerService
+    @Environment(SyncedLyricsService.self) private var syncedLyricsService
+    @Environment(LyricsPresentationCoordinator.self) private var lyricsCoordinator
+
+    let client: any YTMusicClientProtocol
+
+    @Namespace private var lyricsNamespace
+
+    var body: some View {
+        GeometryReader { geo in
+            GlassEffectContainer(spacing: 0) {
+                VStack(spacing: 0) {
+                    self.headerView(containerWidth: geo.size.width)
+                    Divider()
+                        .opacity(0.3)
+                    LyricsContentView(client: self.client, layoutWidth: geo.size.width)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
+                .glassEffectID("lyricsFloatingPanel", in: self.lyricsNamespace)
+            }
+            .glassEffectTransition(.materialize)
+            .padding(.top, 8)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .accessibilityIdentifier(AccessibilityID.LyricsWindow.container)
+    }
+
+    private var floatingPinned: Bool {
+        if case let .floating(pinned) = self.lyricsCoordinator.mode {
+            pinned
+        } else {
+            true
+        }
+    }
+
+    private func headerView(containerWidth: CGFloat) -> some View {
+        let isCompact = containerWidth < 260
+        return HStack(spacing: 8) {
+            Text("Lyrics")
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .padding(.leading, 12)
+
+            Spacer(minLength: 0)
+
+            if isCompact {
+                Menu {
+                    Button {
+                        self.lyricsCoordinator.togglePinned()
+                    } label: {
+                        Label(
+                            self.floatingPinned ? String(localized: "Unpin Window") : String(localized: "Pin to Top"),
+                            systemImage: self.floatingPinned ? "pin.slash" : "pin.fill"
+                        )
+                    }
+
+                    Button {
+                        self.lyricsCoordinator.popIn()
+                    } label: {
+                        Label(String(localized: "Return to Sidebar"), systemImage: "pip.exit")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 28, height: 28)
+                .fixedSize()
+
+                if self.syncedLyricsService.currentLyrics.isAvailable {
+                    self.floatingExplainButton
+                }
+            } else {
+                self.pinToggleButton
+                if self.syncedLyricsService.currentLyrics.isAvailable {
+                    self.floatingExplainButton
+                }
+                Button {
+                    self.lyricsCoordinator.popIn()
+                } label: {
+                    Image(systemName: "pip.exit")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(String(localized: "Return to Sidebar"))
+                .accessibilityLabel(String(localized: "Return to Sidebar"))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
+    }
 
     @ViewBuilder
-    private var contentView: some View {
-        if self.playerService.currentTrack == nil {
-            self.noTrackPlayingView
-        } else if self.syncedLyricsService.isLoading || self.isLoadingFallback {
-            self.loadingView
-        } else {
-            switch self.syncedLyricsService.currentLyrics {
-            case let .synced(synced):
-                self.syncedLyricsContentView(synced)
-            case let .plain(plain):
-                self.plainLyricsContentView(plain)
-            case .unavailable:
-                self.noLyricsView
+    private var pinToggleButton: some View {
+        if case let .floating(pinned) = self.lyricsCoordinator.mode {
+            Button {
+                self.lyricsCoordinator.togglePinned()
+            } label: {
+                Image(systemName: pinned ? "pin.fill" : "pin.slash")
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(pinned ? String(localized: "Unpin Window") : String(localized: "Pin to Top"))
+            .accessibilityLabel(pinned ? String(localized: "Unpin Window") : String(localized: "Pin to Top"))
         }
     }
 
-    private var loadingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .controlSize(.regular)
-                .frame(width: 20, height: 20)
-            Text("Loading lyrics...", comment: "Lyrics panel loading state")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func syncedLyricsContentView(_ synced: SyncedLyrics) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // AI Explanation section (streaming or complete)
-            if self.isExplaining || self.showExplanation || self.explanationError != nil {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if self.isExplaining, let partial = partialSummary {
-                            self.streamingExplanationSection(partial)
-                        } else if self.showExplanation, let summary = lyricsSummary {
-                            self.explanationSection(summary)
-                        } else if let error = explanationError {
-                            self.errorSection(error)
-                        }
-                    }
-                }
-                .frame(maxHeight: 200)
-                Divider().opacity(0.3)
-            }
-
-            SyncedLyricsDisplayView(
-                lyrics: synced,
-                currentTimeMs: self.playerService.currentTimeMs,
-                onSeek: { timeMs in
-                    Task { await self.playerService.seek(to: Double(timeMs) / 1000.0) }
-                }
-            )
-            .background(Color.clear)
-        }
-    }
-
-    private func plainLyricsContentView(_ lyrics: Lyrics) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                // AI Explanation section (streaming or complete)
-                if self.isExplaining, let partial = partialSummary {
-                    self.streamingExplanationSection(partial)
-                    Divider()
-                        .padding(.vertical, 12)
-                } else if self.showExplanation, let summary = lyricsSummary {
-                    self.explanationSection(summary)
-                    Divider()
-                        .padding(.vertical, 12)
-                } else if let error = explanationError {
-                    self.errorSection(error)
-                    Divider()
-                        .padding(.vertical, 12)
-                }
-
-                // Lyrics text
-                Text(lyrics.text)
-                    .font(.system(size: 15, weight: .medium))
-                    .lineSpacing(8)
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 20)
-
-                // Source attribution
-                if let source = lyrics.source {
-                    Divider()
-                        .padding(.horizontal, 16)
-
-                    Text(source)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                }
-            }
-        }
-    }
-
-    private func explanationSection(_ summary: LyricsSummary) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Mood
-            HStack(spacing: 8) {
-                Image(systemName: "heart.circle.fill")
-                    .foregroundStyle(.pink)
-                Text(summary.mood.capitalized)
-                    .font(.subheadline.weight(.medium))
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-
-            // Themes
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(summary.themes, id: \.self) { theme in
-                        Text(theme)
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(.purple.opacity(0.2))
-                            .clipShape(Capsule())
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-
-            // Explanation
-            Text(summary.explanation)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-        }
-        .background(.purple.opacity(0.05))
-    }
-
-    /// Shows partial content as it streams in from the AI.
-    private func streamingExplanationSection(_ partial: LyricsSummary.PartiallyGenerated) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Mood (shows when available)
-            HStack(spacing: 8) {
-                Image(systemName: "heart.circle.fill")
-                    .foregroundStyle(.pink)
-                if let mood = partial.mood {
-                    Text(mood.capitalized)
-                        .font(.subheadline.weight(.medium))
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.6)
-                        .frame(width: 10, height: 10)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-
-            // Themes (shows as they arrive)
-            if let themes = partial.themes, !themes.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(themes, id: \.self) { theme in
-                            Text(theme)
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(.purple.opacity(0.2))
-                                .clipShape(Capsule())
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-
-            // Explanation (shows progressively)
-            if let explanation = partial.explanation {
-                Text(explanation)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
-            } else {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.6)
-                        .frame(width: 10, height: 10)
-                    Text("Analyzing...")
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-            }
-        }
-        .background(.purple.opacity(0.05))
-    }
-
-    /// Shows error state for failed AI explanation.
-    private func errorSection(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Retry") {
-                self.explanationError = nil
-                Task {
-                    await self.explainLyrics()
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(16)
-        .background(.orange.opacity(0.05))
-    }
-
-    private var noLyricsView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "music.note")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
-
-            Text("No Lyrics Available")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-
-            Text("There aren't any lyrics available for this song.", comment: "Lyrics unavailable message")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var noTrackPlayingView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "play.circle")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
-
-            Text("No Song Playing")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-
-            Text("Play a song to view its lyrics here.", comment: "No song playing lyrics message")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: - Data Loading
-
-    @MainActor
-    private func loadLyrics(for videoId: String) async {
-        self.lastLoadedVideoId = videoId
-        self.isLoadingFallback = false
-
-        guard let track = playerService.currentTrack else { return }
-
-        // Don't search if it's not the current track anymore
-        guard track.videoId == videoId else { return }
-
-        let info = LyricsSearchInfo(
-            title: track.title,
-            artist: track.artistsDisplay,
-            album: track.album?.title,
-            duration: track.duration,
-            videoId: track.videoId
-        )
-
-        if SettingsManager.shared.syncedLyricsEnabled {
-            await self.syncedLyricsService.fetchLyrics(for: info)
-        } else {
-            self.syncedLyricsService.currentLyrics = .unavailable
-            self.syncedLyricsService.activeProvider = nil
-        }
-
-        guard self.lastLoadedVideoId == videoId else { return }
-        guard self.playerService.currentTrack?.videoId == videoId else { return }
-
-        // As a fallback to provide plain lyrics
-        if case .unavailable = self.syncedLyricsService.currentLyrics {
-            self.isLoadingFallback = true
-            defer {
-                if self.lastLoadedVideoId == videoId {
-                    self.isLoadingFallback = false
-                }
-            }
-
-            do {
-                let fetchedLyrics = try await client.getLyrics(videoId: videoId)
-                if self.lastLoadedVideoId == videoId,
-                   self.playerService.currentTrack?.videoId == videoId
-                {
-                    self.syncedLyricsService.fallbackToPlainLyrics(fetchedLyrics, videoId: videoId)
-                }
-            } catch {
-                DiagnosticsLogger.api.error("Failed to load plain lyrics fallback: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func explainLyrics() async {
-        guard self.syncedLyricsService.currentLyrics.isAvailable,
-              let track = playerService.currentTrack
-        else { return }
-
-        self.isExplaining = true
-        self.explanationError = nil
-        self.partialSummary = nil
-        self.logger.info("Explaining lyrics for: \(track.title)")
-
-        let promptVersion = FoundationModelsPromptVersion.current
-        let instructions = FoundationModelsPromptLibrary.lyricsExplanationInstructions(
-            version: promptVersion
-        )
-        self.logger.debug("Using Foundation Models lyrics prompt version \(promptVersion.logDescription)")
-
-        guard let session = FoundationModelsService.shared.createAnalysisSession(instructions: instructions) else {
-            self.logger.warning("Apple Intelligence not available for lyrics explanation")
-            self.explanationError = "Apple Intelligence is not available"
-            self.isExplaining = false
-            return
-        }
-
-        var textToExplain: String
-        switch self.syncedLyricsService.currentLyrics {
-        case let .synced(synced):
-            textToExplain = synced.lines.map(\.text).joined(separator: "\n")
-        case let .plain(plain):
-            textToExplain = plain.text
-        case .unavailable:
-            return
-        }
-
-        textToExplain = await FoundationModelsService.shared.fittedPromptContent(
-            context: "lyrics explanation",
-            instructions: instructions,
-            content: textToExplain,
-            generationSchema: LyricsSummary.generationSchema
-        ) { fittedLyrics in
-            FoundationModelsPromptLibrary.lyricsExplanationPrompt(
-                trackTitle: track.title,
-                artistsDisplay: track.artistsDisplay,
-                lyrics: fittedLyrics,
-                version: promptVersion
-            )
-        }
-
-        let prompt = FoundationModelsPromptLibrary.lyricsExplanationPrompt(
-            trackTitle: track.title,
-            artistsDisplay: track.artistsDisplay,
-            lyrics: textToExplain,
-            version: promptVersion
-        )
-
-        do {
-            // Use streaming for progressive UI updates
-            let stream = session.streamResponse(
-                to: prompt,
-                generating: LyricsSummary.self
-            )
-
-            for try await snapshot in stream {
-                // Extract partial content from snapshot for streaming UI updates
-                self.partialSummary = snapshot.content
-            }
-
-            // Stream complete - convert final partial to complete summary
-            if let final = self.partialSummary,
-               let mood = final.mood,
-               let themes = final.themes,
-               let explanation = final.explanation
-            {
-                self.lyricsSummary = LyricsSummary(
-                    themes: themes,
-                    mood: mood,
-                    explanation: explanation
+    private var floatingExplainButton: some View {
+        Button {
+            Task {
+                await self.lyricsCoordinator.explanationViewModel.toggleExplainUI(
+                    syncedLyricsService: self.syncedLyricsService,
+                    playerService: self.playerService,
+                    trackVideoId: self.playerService.currentTrack?.videoId
                 )
-                self.showExplanation = true
-                self.logger.info("Generated lyrics explanation: mood=\(mood), themes=\(themes.joined(separator: ", "))")
             }
-        } catch {
-            if let message = AIErrorHandler.handleAndMessage(error, context: "lyrics explanation") {
-                self.explanationError = message
+        } label: {
+            if self.lyricsCoordinator.explanationViewModel.isExplaining {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.6)
+                    .frame(width: 10, height: 10)
+            } else {
+                Image(systemName: self.lyricsCoordinator.explanationViewModel.showExplanation ? "sparkles.rectangle.stack.fill" : "sparkles")
             }
         }
-
-        self.partialSummary = nil
-        self.isExplaining = false
+        .buttonStyle(.plain)
+        .foregroundStyle(self.lyricsCoordinator.explanationViewModel.showExplanation ? .purple : .secondary)
+        .help(String(localized: "Explain lyrics with AI"))
+        .accessibilityLabel(
+            self.lyricsCoordinator.explanationViewModel.showExplanation
+                ? String(localized: "Hide lyrics explanation")
+                : String(localized: "Explain lyrics with AI")
+        )
+        .requiresIntelligence()
+        .disabled(self.lyricsCoordinator.explanationViewModel.isExplaining)
     }
 }
 
-#Preview {
-    let authService = AuthService()
-    let client = YTMusicClient(authService: authService, webKitManager: .shared)
-    LyricsView(client: client)
-        .environment(PlayerService())
-        .frame(height: 600)
-}
+// MARK: - LyricsView
+
+/// Backward-compatible name for the sidebar lyrics panel.
+@available(macOS 26.0, *)
+typealias LyricsView = SidebarLyricsView

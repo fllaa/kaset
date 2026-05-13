@@ -136,14 +136,32 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Feedback tokens for the current track (used for library add/remove).
     var currentTrackFeedbackTokens: FeedbackTokens?
 
-    /// Whether the lyrics panel is visible.
+    /// Whether the lyrics panel is visible (sidebar or pop-out).
     var showLyrics: Bool = false {
         didSet {
             // Mutual exclusivity: opening lyrics closes queue
             if self.showLyrics, self.showQueue {
                 self.showQueue = false
             }
+            if !self.isApplyingLyricsVisibilityFromCoordinator {
+                self.lyricsPresentationCoordinator?.handlePlayerShowLyricsChanged(
+                    oldValue: oldValue,
+                    newValue: self.showLyrics
+                )
+            }
         }
+    }
+
+    weak var lyricsPresentationCoordinator: LyricsPresentationCoordinator?
+
+    private var isApplyingLyricsVisibilityFromCoordinator = false
+
+    /// Applies sidebar/floating visibility from ``LyricsPresentationCoordinator`` without re-entrant coordination.
+    func setShowLyricsFromCoordinator(_ value: Bool) {
+        guard self.showLyrics != value else { return }
+        self.isApplyingLyricsVisibilityFromCoordinator = true
+        defer { self.isApplyingLyricsVisibilityFromCoordinator = false }
+        self.showLyrics = value
     }
 
     /// Display mode for the queue panel (popup vs side panel).

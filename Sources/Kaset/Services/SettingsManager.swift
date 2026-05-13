@@ -23,6 +23,7 @@ final class SettingsManager {
         static let syncedLyricsEnabled = "settings.syncedLyricsEnabled"
         static let romanizationEnabled = "settings.romanizationEnabled"
         static let contentLanguage = "settings.contentLanguage"
+        static let floatingLyricsPinned = "settings.floatingLyricsPinned"
     }
 
     // MARK: - Launch Page Options
@@ -282,6 +283,13 @@ final class SettingsManager {
         }
     }
 
+    /// When true, the floating lyrics window uses a floating window level; when false, it behaves like a normal window.
+    var floatingLyricsPinned: Bool {
+        didSet {
+            UserDefaults.standard.set(self.floatingLyricsPinned, forKey: Keys.floatingLyricsPinned)
+        }
+    }
+
     // MARK: - Initialization
 
     private init() {
@@ -335,6 +343,8 @@ final class SettingsManager {
         } else {
             self.contentLanguage = .system
         }
+
+        self.floatingLyricsPinned = UserDefaults.standard.object(forKey: Keys.floatingLyricsPinned) as? Bool ?? true
 
         AppLocalization.setLanguage(self.contentLanguage.languageCode)
 

@@ -174,6 +174,12 @@ enum AccessibilityID {
         static let scrollView = "historyView.scrollView"
     }
 
+    // MARK: - Lyrics Window
+
+    enum LyricsWindow {
+        static let container = "lyricsWindow"
+    }
+
     // MARK: - Video Window
 
     enum VideoWindow {

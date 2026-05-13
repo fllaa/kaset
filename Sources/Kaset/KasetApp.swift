@@ -38,6 +38,7 @@ struct KasetApp: App {
     @State private var accountService: AccountService?
     @State private var scrobblingCoordinator: ScrobblingCoordinator
     @State private var syncedLyricsService: SyncedLyricsService
+    @State private var lyricsPresentationCoordinator: LyricsPresentationCoordinator
     @State private var equalizerService = EqualizerService.shared
     @State private var settings = SettingsManager.shared
     @State private var podcastsAvailabilityService = PodcastsAvailabilityService()
@@ -88,10 +89,18 @@ struct KasetApp: App {
         _webKitManager = State(initialValue: webkit)
         _playerService = State(initialValue: player)
         _sharedClient = State(initialValue: client)
-        _syncedLyricsService = State(initialValue: SyncedLyricsService(providers: [
+        let syncedLyrics = SyncedLyricsService(providers: [
             YTMusicSyncedProvider(client: client),
             LRCLibProvider(),
-        ]))
+        ])
+        let lyricsCoordinator = LyricsPresentationCoordinator(
+            playerService: player,
+            syncedLyricsService: syncedLyrics,
+            lyricsPolling: SingletonLyricsPollingAdapter.shared
+        )
+        player.lyricsPresentationCoordinator = lyricsCoordinator
+        _syncedLyricsService = State(initialValue: syncedLyrics)
+        _lyricsPresentationCoordinator = State(initialValue: lyricsCoordinator)
         _notificationService = State(initialValue: NotificationService(playerService: player))
         _accountService = State(initialValue: account)
 
@@ -133,17 +142,28 @@ struct KasetApp: App {
                     .environment(self.accountService)
                     .environment(self.scrobblingCoordinator)
                     .environment(self.syncedLyricsService)
+                    .environment(self.lyricsPresentationCoordinator)
                     .environment(self.equalizerService)
                     .environment(self.podcastsAvailabilityService)
                     .environment(\.searchFocusTrigger, self.$searchFocusTrigger)
                     .environment(\.navigationSelection, self.$navigationSelection)
                     .environment(\.showCommandBar, self.$showCommandBar)
                     .environment(\.showWhatsNew, self.$showWhatsNew)
+                    .onChange(of: self.syncedLyricsService.currentLyrics) { _, newValue in
+                        self.lyricsPresentationCoordinator.handleLyricsResultChanged(newValue)
+                    }
                     .onAppear {
                         DiagnosticsLogger.app.info("KasetApp: App content appeared")
                         // Wire up PlayerService to AppDelegate for dock menu and AppleScript actions
                         // This runs synchronously so AppleScript commands can access playerService immediately
                         self.appDelegate.playerService = self.playerService
+                        self.lyricsPresentationCoordinator.configurePresenters(
+                            client: self.sharedClient,
+                            webKitManager: self.webKitManager
+                        )
+                        self.lyricsPresentationCoordinator.handleLyricsResultChanged(
+                            self.syncedLyricsService.currentLyrics
+                        )
                         // Reference notificationService to keep SwiftUI from deallocating it
                         _ = self.notificationService
                     }
@@ -270,6 +290,11 @@ struct KasetApp: App {
                     }
                 }
                 .keyboardShortcut("l", modifiers: .command)
+
+                Button(self.floatingLyricsMenuTitle) {
+                    self.floatingLyricsMenuAction()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .option])
             }
 
             // Navigation commands - replace default sidebar toggle
@@ -344,6 +369,9 @@ struct KasetApp: App {
             if window.identifier?.rawValue == AccessibilityID.VideoWindow.container {
                 continue
             }
+            if window.identifier?.rawValue == AccessibilityID.LyricsWindow.container {
+                continue
+            }
             window.makeKeyAndOrderFront(nil)
             NSApplication.shared.activate(ignoringOtherApps: true)
             return
@@ -359,6 +387,24 @@ struct KasetApp: App {
             "Repeat One"
         case .one:
             "Repeat Off"
+        }
+    }
+
+    private var floatingLyricsMenuTitle: String {
+        if self.lyricsPresentationCoordinator.mode.isFloating {
+            String(localized: "Close Lyrics Window")
+        } else {
+            String(localized: "Pop Out Lyrics")
+        }
+    }
+
+    private func floatingLyricsMenuAction() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if self.lyricsPresentationCoordinator.mode.isFloating {
+                self.lyricsPresentationCoordinator.popIn()
+            } else {
+                self.lyricsPresentationCoordinator.toggleFloatingWindowShortcut()
+            }
         }
     }
 

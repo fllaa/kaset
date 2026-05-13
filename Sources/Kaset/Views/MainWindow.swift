@@ -24,6 +24,7 @@ struct MainWindow: View {
     @Environment(AccountService.self) private var accountService
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
     @Environment(PodcastsAvailabilityService.self) private var podcastsAvailability
+    @Environment(LyricsPresentationCoordinator.self) private var lyricsCoordinator
     @Environment(\.searchFocusTrigger) private var searchFocusTrigger
     @Environment(\.showCommandBar) private var showCommandBar
     @Environment(\.showWhatsNew) private var showWhatsNew
@@ -354,7 +355,7 @@ struct MainWindow: View {
             // Right sidebar overlay - either lyrics or queue (mutually exclusive)
             self.rightSidebarOverlay(client: self.client)
         }
-        .animation(.easeInOut(duration: 0.25), value: self.playerService.showLyrics)
+        .animation(.easeInOut(duration: 0.25), value: self.lyricsCoordinator.mode)
         .animation(.easeInOut(duration: 0.25), value: self.playerService.showQueue)
         .frame(minWidth: 900, minHeight: 600)
         .toolbar {
@@ -376,14 +377,14 @@ struct MainWindow: View {
     /// Right sidebar overlay showing either lyrics or queue as glass panels (mutually exclusive).
     @ViewBuilder
     private func rightSidebarOverlay(client: any YTMusicClientProtocol) -> some View {
-        let showRightSidebar = self.playerService.showLyrics || self.playerService.showQueue
+        let showRightSidebar = self.lyricsCoordinator.mode == .sidebar || self.playerService.showQueue
 
         if showRightSidebar {
             VStack {
                 Spacer()
 
                 Group {
-                    if self.playerService.showLyrics {
+                    if self.lyricsCoordinator.mode == .sidebar {
                         LyricsView(client: client)
                     } else if self.playerService.showQueue {
                         if self.playerService.queueDisplayMode == .sidepanel {
